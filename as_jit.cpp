@@ -1706,6 +1706,7 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 			esi += sizeof(void*);
 			break;
 		//case asBC_PshRPtr: //All pushes are handled above, near asBC_PshC4
+			// Нужно переделать под новую версию Angel Script
 		// case asBC_STR:
 		// 	{
 		// 		const asCString &str = ((asCScriptEngine*)function->GetEngine())->GetStringConstant(asBC_WORDARG0(pOp));
