@@ -1,19 +1,22 @@
 #include "as_jit.h"
 #include <math.h>
-#include <string.h>
 #include <stdio.h>
-#include <limits.h>
-#include <map>
-#include <functional>
 #include <cstdint>
 
-#include "../source/as_scriptfunction.h"
-#include "../source/as_objecttype.h"
-#include "../source/as_callfunc.h"
-#include "../source/as_scriptengine.h"
-#include "../source/as_scriptobject.h"
-#include "../source/as_texts.h"
-#include "../source/as_context.h"
+#include <EASTL/vector.h>
+#include <EASTL/deque.h>
+#include <EASTL/set.h>
+#include <EASTL/functional.h>
+#include <EASTL/numeric_limits.h>
+#include <EASTL/string.h>
+
+#include "as_scriptfunction.h"
+#include "as_objecttype.h"
+#include "as_callfunc.h"
+#include "as_scriptengine.h"
+#include "as_scriptobject.h"
+#include "as_texts.h"
+#include "as_context.h"
 
 #include "virtual_asm.h"
 using namespace assembler;
@@ -39,10 +42,7 @@ using namespace assembler;
 
 //#define JIT_PRINT_UNHANDLED_CALLS
 #ifdef JIT_PRINT_UNHANDLED_CALLS
-#include <string>
-#include <set>
-
-static std::set<asCScriptFunction*> unhandledCalls;
+static eastl::set<asCScriptFunction*> unhandledCalls;
 #endif
 
 const unsigned codePageSize = 65535 * 4;
@@ -286,10 +286,10 @@ struct SystemCall {
 	bool handleSuspend;
 	bool acceptReturn;
 	bool isSimple;
-	std::function<void(JumpType,bool)> returnHandler;
+	eastl::function<void(JumpType,bool)> returnHandler;
 
 	SystemCall(Processor& CPU, FloatingPointUnit& FPU,
-		std::function<void(JumpType,bool)> ConditionalReturn, asDWORD* const & bytecode, unsigned JitFlags)
+		eastl::function<void(JumpType,bool)> ConditionalReturn, asDWORD* const & bytecode, unsigned JitFlags)
 		: cpu(CPU), fpu(FPU), returnHandler(ConditionalReturn), pOp(bytecode), flags(0)
 	{
 		if((JitFlags & JIT_SYSCALL_NO_ERRORS) != 0)
@@ -336,7 +336,7 @@ struct FutureJump {
 
 	FutureJump* advance() {
 		FutureJump* n = next;
-		delete this;
+		//delete this; // Memory is managed by arena
 		return n;
 	}
 };
@@ -389,8 +389,9 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 
 	asDWORD *end = pOp + length, *start = pOp;
 
-	std::vector<SwitchRegion> switches;
+	eastl::vector<SwitchRegion> switches;
 	SwitchRegion* activeSwitch = 0;
+	eastl::deque<FutureJump> jumpArena;
 
 	lock->enter();
 
@@ -442,7 +443,7 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 	void* curJitFunction = activePage->getFunctionPointer<void*>();
 	void* firstJitEntry = 0;
 	*output = activePage->getFunctionPointer<asJITFunction>();
-	pages.insert(std::pair<asJITFunction,assembler::CodePage*>(*output,activePage));
+	pages.insert(eastl::pair<asJITFunction,assembler::CodePage*>(*output,activePage));
 
 	//If we are outside of opcodes we can execute, ignore all ops until a new JIT entry is found
 	bool waitingForEntry = true;
@@ -639,7 +640,7 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 			def.jitEntry = (void**)arg1.setDeferred();
 			def.jitFunction = (void**)ptr.setDeferred();
 
-			deferredPointers.insert(std::pair<asIScriptFunction*,DeferredCodePointer>(func,def));
+			deferredPointers.insert(eastl::pair<asIScriptFunction*,DeferredCodePointer>(func,def));
 		}
 
 		unsigned sb = cpu.call_cdecl_args("rr", &arg0, &arg1);
@@ -743,7 +744,8 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 		auto& jmp = jumpTable[bc - start];
 		if(bc > pOp) {
 			//Prep the jump for a future instruction
-			auto* jumpData = new FutureJump;
+			jumpArena.push_back(FutureJump());
+			auto* jumpData = &jumpArena.back();
 			jumpData->jump = cpu.prep_long_jump(type);
 			jumpData->next = jmp ? (FutureJump*)jmp : 0;
 			jmp = (byte*)jumpData;
@@ -764,7 +766,8 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 		auto& jmp = jumpTable[bc - start];
 		if(bc > op) {
 			//Prep the jump for a future instruction
-			auto* jumpData = new FutureJump;
+			jumpArena.push_back(FutureJump());
+			auto* jumpData = &jumpArena.back();
 			jumpData->jump = cpu.prep_long_jump(type);
 			jumpData->next = jmp ? (FutureJump*)jmp : 0;
 			jmp = (byte*)jumpData;
@@ -791,7 +794,7 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 			activePage = newPage;
 			activePage->grab();
 
-			pages.insert(std::pair<asJITFunction,assembler::CodePage*>(*output,activePage));
+			pages.insert(eastl::pair<asJITFunction,assembler::CodePage*>(*output,activePage));
 			byteStart = (byte*)cpu.op;
 		}
 	};
@@ -1026,7 +1029,7 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 					//ERR
 					cpu.end_short_jump(test1); cpu.end_short_jump(test2);
 					Return(false);
-					cpu.end_short_jump(skip_ret);
+					cpu.end_short_jump(skip_err_return);
 
 					pOp = pThirdOp;
 					continue;
@@ -1706,14 +1709,6 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 			esi += sizeof(void*);
 			break;
 		//case asBC_PshRPtr: //All pushes are handled above, near asBC_PshC4
-			// Нужно переделать под новую версию Angel Script
-		// case asBC_STR:
-		// 	{
-		// 		const asCString &str = ((asCScriptEngine*)function->GetEngine())->GetStringConstant(asBC_WORDARG0(pOp));
-		// 		esi -= sizeof(void*) + sizeof(asDWORD);
-		// 		as<void*>(*esi + sizeof(asDWORD)) = (void*)str.AddressOf();
-		// 		as<asDWORD>(*esi) = (asDWORD)str.GetLength();
-		// 	} break;
 		case asBC_CALLSYS:
 		case asBC_Thiscall1:
 			{
@@ -3092,7 +3087,7 @@ int asCJITCompiler::CompileFunction(asIScriptFunction *function, asJITFunction *
 		Return(true);
 
 	for(auto i = switches.begin(), end = switches.end(); i != end; ++i)
-		jumpTables.insert(std::pair<asJITFunction,unsigned char**>(*output, i->buffer));
+		jumpTables.insert(eastl::pair<asJITFunction,unsigned char**>(*output, i->buffer));
 
 	activePage->markUsedAddress((void*)cpu.op);
 	lock->leave();

@@ -1,7 +1,8 @@
 #pragma once
 #include "angelscript.h"
-#include <vector>
-#include <map>
+#include <EASTL/vector.h>
+#include <EASTL/vector_multimap.h>
+#include <EASTL/vector_map.h>
 
 namespace assembler {
 struct CodePage;
@@ -29,13 +30,13 @@ enum JITSettings {
 
 class asCJITCompiler : public asIJITCompiler {
 	assembler::CodePage* activePage;
-	std::multimap<asJITFunction,assembler::CodePage*> pages;
+	eastl::vector_map<asJITFunction,assembler::CodePage*> pages;
 
 	assembler::CriticalSection* lock;
 
 	unsigned flags;
 
-	std::multimap<asJITFunction,unsigned char**> jumpTables;
+	eastl::vector_map<asJITFunction,unsigned char**> jumpTables;
 	unsigned char** activeJumpTable;
 	unsigned currentTableSize;
 
@@ -43,7 +44,7 @@ class asCJITCompiler : public asIJITCompiler {
 		void** jitFunction;
 		void** jitEntry;
 	};
-	std::multimap<asIScriptFunction*,DeferredCodePointer> deferredPointers;
+	eastl::vector_multimap<asIScriptFunction*,DeferredCodePointer> deferredPointers;
 public:
 	asCJITCompiler(unsigned Flags = 0);
 	~asCJITCompiler();
